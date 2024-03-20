@@ -178,17 +178,24 @@ impl ClickpackDb {
         }
     }
 
-    #[cfg(feature = "live")]
+    // #[cfg(feature = "live")]
     pub fn mark_downloaded(&mut self, name: &str, path: PathBuf, downloaded: bool) {
-        if let Some(entry) = self.db.write().unwrap().entries.get_mut(name) {
+        let update_status = |status: &mut DownloadStatus| {
             if downloaded {
-                entry.dwn_status = DownloadStatus::Downloaded {
-                    path,
+                *status = DownloadStatus::Downloaded {
+                    path: path.clone(),
                     do_select: false,
                 };
             } else {
-                entry.dwn_status = DownloadStatus::NotDownloaded;
+                *status = DownloadStatus::NotDownloaded;
             }
+        };
+
+        if let Some(entry) = self.db.write().unwrap().entries.get_mut(name) {
+            update_status(&mut entry.dwn_status);
+        }
+        if let Some(entry) = self.filtered_entries.get_mut(name) {
+            update_status(&mut entry.dwn_status);
         }
     }
 
@@ -255,12 +262,12 @@ impl ClickpackDb {
         mut entry: Entry,
         name: String,
         req_fn: &'static RequestFn,
-        mut path: PathBuf,
+        path: PathBuf,
         do_select: bool,
     ) {
         log::info!("downloading entry \"{name}\" to path {path:?}");
         let pending_update = self.pending_update.clone();
-        path.push(&name);
+        // path.push(&name);
         std::thread::spawn(move || {
             match req_fn(&entry.url) {
                 Ok(body) => {
@@ -380,7 +387,15 @@ impl ClickpackDb {
                 self.refresh_button(ui);
             });
         } else if self.filtered_entries.len() <= 15 {
-            ui.label(format!("Showing {} entries", self.filtered_entries.len()));
+            ui.label(format!(
+                "Showing {} entr{}",
+                self.filtered_entries.len(),
+                if self.filtered_entries.len() == 1 {
+                    "y"
+                } else {
+                    "ies"
+                }
+            ));
         }
     }
 
@@ -455,7 +470,7 @@ impl ClickpackDb {
                         };
                         #[cfg(feature = "live")]
                         let mut path = {
-                            let mut path = PathBuf::from(".zcb/clickpacks");
+                            let mut path = PathBuf::from(".zcb").join("clickpacks");
                             path.push(&new_name);
                             path
                         };
@@ -481,13 +496,18 @@ impl ClickpackDb {
                     do_select,
                 } => {
                     ui.style_mut().spacing.item_spacing.x = 5.0;
+                    #[cfg(not(feature = "live"))]
                     if ui.button("Open folder").clicked() {
                         if let Err(e) = open::that(path) {
                             log::error!("failed to open folder {path:?}: {e}");
                         }
                     }
-                    #[cfg(not(feature = "live"))]
-                    if ui.button("Select").clicked() || do_select {
+                    if ui
+                        .button("Select")
+                        .on_hover_text("Select this clickpack as the current one")
+                        .clicked()
+                        || (cfg!(not(feature = "live")) && do_select)
+                    {
                         if do_select {
                             set_status!(DownloadStatus::Downloaded {
                                 path: path.clone(),
@@ -497,12 +517,14 @@ impl ClickpackDb {
                         log::info!("selecting clickpack {path:?}");
                         self.select_clickpack = Some(path.clone());
                     }
-                    // #[cfg(feature = "live")]
+                    ui.style_mut().spacing.item_spacing.x = 5.0;
+                    #[cfg(feature = "live")]
                     if ui
                         .button("Delete")
                         .on_hover_text("Delete this clickpack from .zcb/clickpacks")
                         .clicked()
                     {
+                        log::info!("deleting directory {path:?}");
                         if let Err(e) = std::fs::remove_dir_all(path) {
                             log::error!("failed to delete folder {path:?}: {e}");
                         }
