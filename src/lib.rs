@@ -49,7 +49,7 @@ pub struct Entry {
 }
 
 #[derive(Default, Clone)]
-enum Status {
+pub enum Status {
     #[default]
     NotLoaded,
     Loading,
@@ -74,7 +74,7 @@ impl Tags {
 
 #[derive(Default)]
 pub struct ClickpackDb {
-    status: Arc<RwLock<Status>>,
+    pub status: Arc<RwLock<Status>>,
     pub db: Arc<RwLock<Database>>,
     filtered_entries: IndexMap<String, Entry>,
     search_query: String,
@@ -82,6 +82,7 @@ pub struct ClickpackDb {
     /// If [`Some`], this clickpack should be selected and the viewport should be closed.
     pub select_clickpack: Option<PathBuf>,
     tags: Tags,
+    pending_clickpack_delete: Vec<PathBuf>,
 }
 
 #[cfg(not(feature = "live"))]
@@ -215,6 +216,11 @@ impl ClickpackDb {
         if !is_empty {
             self.pending_update.write().unwrap().clear();
         }
+        for path in self.pending_clickpack_delete.drain(..) {
+            if let Err(e) = std::fs::remove_dir_all(&path) {
+                log::error!("failed to delete clickpack directory {path:?}: {e}");
+            }
+        }
     }
 
     pub fn show(
@@ -347,7 +353,9 @@ impl ClickpackDb {
             .body(|body| {
                 body.rows(text_height * 1.5, self.filtered_entries.len(), |mut row| {
                     let row_index = row.index();
-                    let entry = self.filtered_entries.get_index(row_index).unwrap();
+                    let Some(entry) = self.filtered_entries.get_index(row_index) else {
+                        return;
+                    };
                     let name = entry.0.clone();
                     let entry = entry.1.clone();
                     row.col(|ui| {
@@ -518,16 +526,14 @@ impl ClickpackDb {
                         self.select_clickpack = Some(path.clone());
                     }
                     ui.style_mut().spacing.item_spacing.x = 5.0;
-                    #[cfg(feature = "live")]
+                    // #[cfg(feature = "live")]
                     if ui
                         .button("Delete")
                         .on_hover_text("Delete this clickpack from .zcb/clickpacks")
                         .clicked()
                     {
-                        log::info!("deleting directory {path:?}");
-                        if let Err(e) = std::fs::remove_dir_all(path) {
-                            log::error!("failed to delete folder {path:?}: {e}");
-                        }
+                        log::info!("enqueuing clickpack {path:?} for deletion");
+                        self.pending_clickpack_delete.push(path.clone());
                         set_status!(DownloadStatus::NotDownloaded);
                     }
                 }
