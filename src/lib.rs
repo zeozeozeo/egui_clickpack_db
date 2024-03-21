@@ -83,6 +83,8 @@ pub struct ClickpackDb {
     pub select_clickpack: Option<PathBuf>,
     tags: Tags,
     pending_clickpack_delete: Vec<PathBuf>,
+    #[cfg(feature = "live")]
+    pub has_refreshed: bool,
 }
 
 #[cfg(not(feature = "live"))]
@@ -179,7 +181,7 @@ impl ClickpackDb {
         }
     }
 
-    // #[cfg(feature = "live")]
+    #[cfg(feature = "live")]
     pub fn mark_downloaded(&mut self, name: &str, path: PathBuf, downloaded: bool) {
         let update_status = |status: &mut DownloadStatus| {
             if downloaded {
@@ -247,6 +249,10 @@ impl ClickpackDb {
             Status::Loaded { did_filter } => {
                 if !did_filter {
                     self.update_filtered_entries();
+                    #[cfg(feature = "live")]
+                    {
+                        self.has_refreshed = true;
+                    }
                     *self.status.write().unwrap() = Status::Loaded { did_filter: true };
                 }
             }
@@ -526,7 +532,7 @@ impl ClickpackDb {
                         self.select_clickpack = Some(path.clone());
                     }
                     ui.style_mut().spacing.item_spacing.x = 5.0;
-                    // #[cfg(feature = "live")]
+                    #[cfg(feature = "live")]
                     if ui
                         .button("Delete")
                         .on_hover_text("Delete this clickpack from .zcb/clickpacks")
