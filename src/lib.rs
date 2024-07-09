@@ -367,7 +367,7 @@ impl ClickpackDb {
                     row.col(|ui| {
                         ui.horizontal(|ui| {
                             ui.style_mut().spacing.item_spacing.x = 5.0;
-                            ui.add(egui::Label::new(name.replace('_', " ")).wrap(true));
+                            ui.add(egui::Label::new(name.replace('_', " ")).wrap());
                             ui.style_mut().spacing.item_spacing.x = 5.0;
                             if entry.has_noise {
                                 ui.colored_label(Color32::KHAKI, "🎧")
