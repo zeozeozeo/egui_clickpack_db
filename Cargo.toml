@@ -1,7 +1,15 @@
 [package]
 name = "egui_clickpack_db"
+description = "ClickpackDB integration for egui (public Geometry Dash clickpack archive)"
 version = "0.3.0"
 edition = "2021"
+license = "GLWTPL OR Unlicense OR Apache-2.0 OR MIT"
+documentation = "https://docs.rs/egui_clickpack_db"
+homepage = "https://github.com/zeozeozeo/egui_clickpack_db"
+repository = "https://github.com/zeozeozeo/egui_clickpack_db"
+categories = ["gui"]
+keywords = ["egui", "clickpackdb", "clickpack", "geometrydash", "archive", "ui"]
+readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
