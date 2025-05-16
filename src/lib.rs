@@ -6,6 +6,7 @@ use fuzzy_matcher::FuzzyMatcher;
 use humansize::{format_size, DECIMAL};
 use indexmap::IndexMap;
 use std::{
+    collections::HashMap,
     io::Cursor,
     path::PathBuf,
     sync::{Arc, RwLock},
@@ -16,7 +17,8 @@ const DATABASE_URL: &str = "https://raw.githubusercontent.com/zeozeozeo/clickpac
 #[cfg(not(feature = "live"))]
 const TEMP_DIRNAME: &str = "zcb-clickpackdb";
 
-type RequestFn = dyn Fn(&str) -> Result<Vec<u8>, String> + Sync;
+// url, is_post
+type RequestFn = dyn Fn(&str, bool) -> Result<Vec<u8>, String> + Sync;
 
 #[cfg(not(feature = "live"))]
 type PickFolderFn = dyn Fn() -> Option<PathBuf> + Sync;
@@ -38,6 +40,8 @@ pub struct Database {
     pub updated_at_unix: i64,
     #[serde(rename = "clickpacks")]
     pub entries: IndexMap<String, Entry>,
+    /// Hiatus URL, usually "https://hiatus.zeo.lol"
+    pub hiatus: String,
 }
 
 #[derive(serde::Deserialize, Clone)]
@@ -46,8 +50,13 @@ pub struct Entry {
     uncompressed_size: usize,
     has_noise: bool,
     url: String,
-    #[serde(skip_deserializing)]
+    #[serde(skip)]
     dwn_status: DownloadStatus,
+    #[serde(skip)]
+    downloads: u32,
+    // this is a String so we don't have to call to_string each time we draw the table
+    #[serde(skip)]
+    downloads_str: String,
 }
 
 #[derive(Default, Clone)]
@@ -136,7 +145,7 @@ impl ClickpackDb {
         req_fn: &'static RequestFn,
     ) {
         log::info!("loading database from {DATABASE_URL}");
-        std::thread::spawn(move || match req_fn(DATABASE_URL) {
+        std::thread::spawn(move || match req_fn(DATABASE_URL, false) {
             Ok(body) => {
                 *db.write().unwrap() = match serde_json::from_slice(&body) {
                     Ok(entries) => entries,
@@ -146,14 +155,54 @@ impl ClickpackDb {
                         return;
                     }
                 };
-                log::info!("loaded {} entries", db.read().unwrap().entries.len());
+                let hiatus_url;
+                {
+                    let db_lock = db.read().unwrap();
+                    hiatus_url = db_lock.hiatus.clone();
+                    log::info!(
+                        "loaded {} entries, hiatus url: {}",
+                        db_lock.entries.len(),
+                        hiatus_url,
+                    );
+                }
                 *status.write().unwrap() = Status::Loaded { did_filter: false };
+
+                // now load downloads from hiatus
+                Self::load_hiatus(db, hiatus_url, req_fn);
             }
             Err(e) => {
                 log::error!("failed to GET database: {e}");
                 *status.write().unwrap() = Status::Error(e.to_string());
             }
         });
+    }
+
+    fn load_hiatus(db: Arc<RwLock<Database>>, hiatus_url: String, req_fn: &'static RequestFn) {
+        let downloads_endpoint = hiatus_url + "/downloads/all";
+        match req_fn(&downloads_endpoint, false) {
+            Ok(body) => {
+                let downloads: HashMap<String, u32> = match serde_json::from_slice(&body) {
+                    Ok(entries) => entries,
+                    Err(e) => {
+                        log::error!("failed to parse hiatus downloads: {e}");
+                        return;
+                    }
+                };
+
+                // update entries w/ downloads
+                let mut db_lock = db.write().unwrap();
+                for (name, downloads) in downloads {
+                    if downloads <= 0 {
+                        continue; // shouldn't happen
+                    }
+                    if let Some(entry) = db_lock.entries.get_mut(&name) {
+                        entry.downloads = downloads;
+                        entry.downloads_str = downloads.to_string();
+                    }
+                }
+            }
+            Err(e) => log::error!("failed to GET {downloads_endpoint} (hiatus): {e}"),
+        }
     }
 
     fn update_filtered_entries(&mut self) {
@@ -174,9 +223,15 @@ impl ClickpackDb {
             });
         }
 
+        // sort by most downloads
+        self.filtered_entries
+            .sort_by(|_, v1, _, v2| v2.downloads.cmp(&v1.downloads));
+
         // fuzzy sort with search query
         if !self.search_query.is_empty() {
             let matcher = fuzzy_matcher::skim::SkimMatcherV2::default();
+            self.filtered_entries
+                .retain(|k, _| matcher.fuzzy_match(k, &self.search_query).is_some());
             self.filtered_entries.sort_by_cached_key(|k, _| {
                 std::cmp::Reverse(matcher.fuzzy_match(k, &self.search_query).unwrap_or(0))
             });
@@ -278,12 +333,13 @@ impl ClickpackDb {
         req_fn: &'static RequestFn,
         path: PathBuf,
         do_select: bool,
+        hiatus_url: String,
     ) {
         log::info!("downloading entry \"{name}\" to path {path:?}");
         let pending_update = self.pending_update.clone();
         // path.push(&name);
         std::thread::spawn(move || {
-            match req_fn(&entry.url) {
+            match req_fn(&entry.url, false) {
                 Ok(body) => {
                     log::debug!("body length: {} bytes, extracting zip", body.len());
                     if let Err(e) = zip_extract::extract(Cursor::new(body), &path, true) {
@@ -298,7 +354,19 @@ impl ClickpackDb {
                     entry.dwn_status = DownloadStatus::Error(e);
                 }
             }
-            pending_update.write().unwrap().insert(name, entry);
+
+            pending_update.write().unwrap().insert(name.clone(), entry);
+
+            // great, now try to increment the download counter
+            let inc_endpoint = hiatus_url + "/inc/" + &name;
+            match req_fn(&inc_endpoint, true /* POST */) {
+                Ok(_) => {
+                    log::info!("incremented download counter for {name}");
+                }
+                Err(e) => {
+                    log::error!("failed to increment download counter for {name}: {e}");
+                }
+            }
         });
     }
 
@@ -370,7 +438,13 @@ impl ClickpackDb {
                         ui.horizontal(|ui| {
                             ui.style_mut().spacing.item_spacing.x = 5.0;
                             ui.add(egui::Label::new(name.replace('_', " ")).wrap());
-                            ui.style_mut().spacing.item_spacing.x = 5.0;
+                            if entry.downloads != 0 {
+                                ui.add_enabled(
+                                    false,
+                                    egui::Label::new(&entry.downloads_str).wrap(),
+                                )
+                                .on_disabled_hover_text("Number of downloads");
+                            }
                             if entry.has_noise {
                                 ui.colored_label(Color32::KHAKI, "🎧")
                                     .on_hover_text("This clickpack has a noise file")
@@ -450,12 +524,14 @@ impl ClickpackDb {
                         {
                             if let Some(path) = pick_folder() {
                                 set_status!(DownloadStatus::Downloading);
+                                let hiatus_url = self.db.read().unwrap().hiatus.clone();
                                 self.download_entry(
                                     entry.clone(),
                                     name.clone(),
                                     req_fn,
                                     path,
                                     false,
+                                    hiatus_url,
                                 );
                             }
                         }
@@ -500,7 +576,8 @@ impl ClickpackDb {
                             .map_err(|e| log::error!("create_dir_all failed: {e}"));
 
                         // download clickpack zip & extract it
-                        self.download_entry(entry.clone(), name, req_fn, path, true);
+                        let hiatus_url = self.db.read().unwrap().hiatus.clone();
+                        self.download_entry(entry.clone(), name, req_fn, path, true, hiatus_url);
                     }
                 }
                 DownloadStatus::Downloading => {
