@@ -192,7 +192,7 @@ impl ClickpackDb {
                 // update entries w/ downloads
                 let mut db_lock = db.write().unwrap();
                 for (name, downloads) in downloads {
-                    if downloads <= 0 {
+                    if downloads == 0 {
                         continue; // shouldn't happen
                     }
                     if let Some(entry) = db_lock.entries.get_mut(&name) {
