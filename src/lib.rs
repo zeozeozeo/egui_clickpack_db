@@ -366,7 +366,7 @@ impl ClickpackDb {
             pending_update.write().unwrap().insert(name.clone(), entry);
 
             // great, now try to increment the download counter
-            let inc_endpoint = hiatus_url + "/inc/" + &name;
+            let inc_endpoint = hiatus_url + "/inc/" + urlencoding::encode(&name).as_ref();
             match req_fn(&inc_endpoint, true /* POST */) {
                 Ok(_) => {
                     log::info!("incremented download counter for {name}");

@@ -48,7 +48,8 @@ const DUMMY_DB: &str = r#"{
     "hiatus": "https://hiatus.zeo.lol"
 }"#;
 
-fn req_fn(url: &str, _post: bool) -> Result<Vec<u8>, String> {
+fn req_fn(url: &str, post: bool) -> Result<Vec<u8>, String> {
+    println!("requesting {url}, post: {post}");
     if url == "https://raw.githubusercontent.com/zeozeozeo/clickpack-db/main/db.json" {
         Ok(DUMMY_DB.as_bytes().to_vec())
     } else if url == "https://hiatus.zeo.lol/downloads/all" {
