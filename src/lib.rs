@@ -168,7 +168,7 @@ impl ClickpackDb {
                 *status.write().unwrap() = Status::Loaded { did_filter: false };
 
                 // now load downloads from hiatus
-                Self::load_hiatus(db, hiatus_url, req_fn);
+                Self::load_hiatus(db, status, hiatus_url, req_fn);
             }
             Err(e) => {
                 log::error!("failed to GET database: {e}");
@@ -177,7 +177,12 @@ impl ClickpackDb {
         });
     }
 
-    fn load_hiatus(db: Arc<RwLock<Database>>, hiatus_url: String, req_fn: &'static RequestFn) {
+    fn load_hiatus(
+        db: Arc<RwLock<Database>>,
+        status: Arc<RwLock<Status>>,
+        hiatus_url: String,
+        req_fn: &'static RequestFn,
+    ) {
         let downloads_endpoint = hiatus_url + "/downloads/all";
         match req_fn(&downloads_endpoint, false) {
             Ok(body) => {
@@ -200,6 +205,9 @@ impl ClickpackDb {
                         entry.downloads_str = downloads.to_string();
                     }
                 }
+
+                // reload sorting
+                *status.write().unwrap() = Status::Loaded { did_filter: false };
             }
             Err(e) => log::error!("failed to GET {downloads_endpoint} (hiatus): {e}"),
         }
