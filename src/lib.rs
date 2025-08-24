@@ -11,6 +11,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, RwLock},
 };
+use zip::read::root_dir_common_filter;
 
 const DATABASE_URL: &str = "https://raw.githubusercontent.com/zeozeozeo/clickpack-db/main/db.json";
 
@@ -350,7 +351,17 @@ impl ClickpackDb {
             match req_fn(&entry.url, false) {
                 Ok(body) => {
                     log::debug!("body length: {} bytes, extracting zip", body.len());
-                    if let Err(e) = zip_extract::extract(Cursor::new(body), &path, true) {
+                    let mut archive = match zip::ZipArchive::new(Cursor::new(&body)) {
+                        Ok(a) => a,
+                        Err(e) => {
+                            log::error!("failed to read zip: {e}");
+                            entry.dwn_status = DownloadStatus::Error(e.to_string());
+                            return;
+                        }
+                    };
+                    if let Err(e) =
+                        archive.extract_unwrapped_root_dir(&path, root_dir_common_filter)
+                    {
                         log::error!("failed to extract zip to {path:?}: {e}");
                         entry.dwn_status = DownloadStatus::Error(e.to_string());
                     } else {
